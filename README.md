@@ -37,3 +37,11 @@
 - run 先建再跑：开始就插一条 running，结束再更新。中途进程被杀，这条 running 还在，能发现卡住；等结束再插就什么都没有了。我表里 id 为 1 那条就是这么留下的。
 - seq 是 steps 表的行号，llm 和 tool 都数；steps 只数模型调用次数。max_steps=1 那次 steps 是 1，seq 到 4。
 - 字典里的键和表的列名撞了会被覆盖：get_run 把列表塞进 run["steps"]，把步数那个数字盖掉了，assert 报错离原因很远。改成 run["step_rows"]。
+
+### 第 5 章 上下文管理器收尾
+
+- 解决什么问题：第 4 章每个 Agent 入口都要抄 start_run、try、finish_run done、except finish_run failed、raise 这十几行，而且 l4 的 run_agent 没有 try，send 一炸记录就停在 running。用 with 包起来，Agent 代码里只剩业务。
+- yield 前后：yield 之前是进入（start_run 建 Run 交出去），yield 之后是退出（finish_run）。with 块里的代码在 yield 那一行"里面"跑，块里 raise 会从 yield 冒出来，被 except 接住。
+- except 里要 raise：上下文管理器只负责收尾，不负责吞错。吞了上层以为成功。裸 raise 不写 raise e，保留原始调用栈。
+- 失败记 0 的 bug 怎么根治：token 和 seq 都挂在 yield 交出去的 Run 对象上，成功和失败两个分支读的是同一个对象，没有第二份数据可以写错。l5 验证里 failed 那条 token 是 371+87。
+- 要影响 finish_run 写什么（比如 run.status = "aborted"），必须在 with 块结束之前改，块一结束 else 分支就已经把表写了。

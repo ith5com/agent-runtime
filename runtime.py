@@ -62,11 +62,48 @@ def call_tool(tools: dict, call: dict) -> tuple[str, str | None]:
 
 
 # 4. 封装修改 run_loop, print打印的step 修改为存数据库
+# import time
+# from runs import add_step
+
+# def run_loop(send, messages: list[dict], tools: dict, *,
+#              run_id: int, model_name: str, max_steps: int = 6) -> LoopResult:
+#     r = LoopResult(messages=list(messages))
+#     seq = 0
+#     for _ in range(max_steps):
+#         t1 = time.perf_counter()
+#         data = send(r.messages)
+#         latency = int((time.perf_counter() - t1) * 1000)
+#         msg = data["choices"][0]["message"]
+#         usage = data.get("usage") or {}
+#         it, ot = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
+#         r.steps += 1
+#         r.input_tokens += it
+#         r.output_tokens += ot
+#         seq += 1
+#         add_step(run_id, seq, "llm", model_name,
+#                  input=r.messages, output=msg,
+#                  input_tokens=it, output_tokens=ot, latency_ms=latency)
+#         r.messages.append(msg)
+#         if not msg.get("tool_calls"):
+#             return r
+#         for call in msg["tool_calls"]:
+#             t2 = time.perf_counter()
+#             text, error = call_tool(tools, call)
+#             seq += 1
+#             add_step(run_id, seq, "tool", call["function"]["name"],
+#                      input=call["function"]["arguments"], output=text,
+#                      latency_ms=int((time.perf_counter() - t2) * 1000), error=error)
+#             r.messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
+#     r.hit_max_steps = True
+#     return r
+
+
+# 5.3
 import time
 from runs import add_step
+from runs import Run
 
-def run_loop(send, messages: list[dict], tools: dict, *,
-             run_id: int, model_name: str, max_steps: int = 6) -> LoopResult:
+def run_loop(send, messages, tools, *, run: Run, max_steps=6) -> LoopResult:
     r = LoopResult(messages=list(messages))
     seq = 0
     for _ in range(max_steps):
@@ -74,15 +111,13 @@ def run_loop(send, messages: list[dict], tools: dict, *,
         data = send(r.messages)
         latency = int((time.perf_counter() - t1) * 1000)
         msg = data["choices"][0]["message"]
-        usage = data.get("usage") or {}
+        usage = run.add_usage(data.get("usage") or {})
         it, ot = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
         r.steps += 1
         r.input_tokens += it
         r.output_tokens += ot
         seq += 1
-        add_step(run_id, seq, "llm", model_name,
-                 input=r.messages, output=msg,
-                 input_tokens=it, output_tokens=ot, latency_ms=latency)
+        run.step("llm", run.model, input=r.messages, output=msg, usage=usage, latency_ms=latency)
         r.messages.append(msg)
         if not msg.get("tool_calls"):
             return r
@@ -90,9 +125,8 @@ def run_loop(send, messages: list[dict], tools: dict, *,
             t2 = time.perf_counter()
             text, error = call_tool(tools, call)
             seq += 1
-            add_step(run_id, seq, "tool", call["function"]["name"],
-                     input=call["function"]["arguments"], output=text,
-                     latency_ms=int((time.perf_counter() - t2) * 1000), error=error)
+            run.step("tool", call["function"]["name"], input=call["function"]["arguments"],
+                     output=text, latency_ms=int((time.perf_counter() - t2) * 1000), error=error)
             r.messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
     r.hit_max_steps = True
     return r

@@ -114,3 +114,50 @@ def get_run(run_id: int) -> dict | None:
         run["step_rows"] = steps
     return run
 
+
+class Run:
+    """一次执行的记账本。with tracked_run(...) as run 交出来的就是它。"""
+
+    def __init__(self, run_id: int, model: str):
+        self.id = run_id
+        self.model = model
+        self.seq = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.status = "done"       # 正常退出时写的状态，块里可以改成 aborted
+
+    def add_usage(self, usage: dict) -> dict:
+        self.input_tokens += usage.get("prompt_tokens", 0)
+        self.output_tokens += usage.get("completion_tokens", 0)
+        return usage
+
+    def step(self, kind: str, name: str, *, usage: dict | None = None,
+             input=None, output=None, latency_ms: int | None = None, error: str | None = None) -> int:
+        self.seq += 1
+        usage = usage or {}
+        add_step(self.id, self.seq, kind, name,
+                 input=input, output=output,
+                 input_tokens=usage.get("prompt_tokens", 0),
+                 output_tokens=usage.get("completion_tokens", 0),
+                 latency_ms=latency_ms, error=error)
+        return self.seq
+
+import time
+from contextlib import contextmanager
+
+
+@contextmanager
+def tracked_run(*, trace_id: str | None = None, agent: str, model: str):
+    run = Run(start_run(trace_id=trace_id or new_trace_id(), agent=agent, model=model), model)
+    t0 = time.perf_counter()
+    try:
+        yield run
+    except Exception as e:
+        finish_run(run.id, status="failed", model=model,
+                   input_tokens=run.input_tokens, output_tokens=run.output_tokens,
+                   latency_ms=int((time.perf_counter() - t0) * 1000), steps=run.seq, error=repr(e))
+        raise
+    else:
+       finish_run(run.id, status=run.status, model=model, # status 用 run.status，其余和上面一样，没有 error
+                    input_tokens=run.input_tokens, output_tokens=run.output_tokens,
+                    latency_ms=int((time.perf_counter() - t0) * 1000), steps=run.seq)        
