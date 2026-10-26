@@ -1,21 +1,30 @@
 import time
 from llm import chat, MODEL
 from runtime import run_loop
-from runs import init_db, start_run, finish_run, get_run, new_trace_id
+from runs import init_db, start_run, finish_run, get_run, new_trace_id, tracked_run
 from l3_agent import TOOLS, SCHEMA, send
 
 
+# def run_agent(question: str, *, max_steps: int = 6) -> int:
+#     run_id = start_run(trace_id=new_trace_id(), agent="l4", model=MODEL)
+#     t0 = time.perf_counter()
+#     r = run_loop(send, [{"role": "user", "content": question}], TOOLS,
+#                  run_id=run_id, model_name=MODEL, max_steps=max_steps)
+#     finish_run(run_id,
+#                status="failed" if r.hit_max_steps else "done",
+#                model=MODEL, input_tokens=r.input_tokens, output_tokens=r.output_tokens,
+#                latency_ms=int((time.perf_counter() - t0) * 1000), steps=r.steps,
+#                error="撞到步数上限" if r.hit_max_steps else None)
+#     return run_id
+
+# 5.5
+
 def run_agent(question: str, *, max_steps: int = 6) -> int:
-    run_id = start_run(trace_id=new_trace_id(), agent="l4", model=MODEL)
-    t0 = time.perf_counter()
-    r = run_loop(send, [{"role": "user", "content": question}], TOOLS,
-                 run_id=run_id, model_name=MODEL, max_steps=max_steps)
-    finish_run(run_id,
-               status="failed" if r.hit_max_steps else "done",
-               model=MODEL, input_tokens=r.input_tokens, output_tokens=r.output_tokens,
-               latency_ms=int((time.perf_counter() - t0) * 1000), steps=r.steps,
-               error="撞到步数上限" if r.hit_max_steps else None)
-    return run_id
+    with tracked_run(agent="l5", model=MODEL) as run:
+        r = run_loop(send, [{"role": "user", "content": question}], TOOLS, run=run, max_steps=max_steps)
+        if r.hit_max_steps:
+            raise RuntimeError("撞到步数上限")
+    return run.id
 
 
 if __name__ == "__main__":
