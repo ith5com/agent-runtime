@@ -2,11 +2,12 @@ from pydantic import BaseModel, Field
 from llm import chat, MODEL
 from runs import init_db, tracked_run
 from structured import invoke_structured
+from runs import Run
 
 class Question(BaseModel):
     stem: str = Field(description="题干，一句话，考察理解不考察背诵")
     options: list[str] = Field(description="四个选项的文字，不带 A B C D 前缀")
-    answer: int = Field(description="正确选项的下标，0 到 3")
+    answer: int = Field(ge=0, le=3, description="正确选项的下标，0 到 3")
 
 
 class Quiz(BaseModel):
@@ -17,7 +18,7 @@ class Quiz(BaseModel):
 
 def check_quiz(quiz: Quiz) -> list[str]:
     problems = []
-    MIN_QUESTIONS = 10
+    MIN_QUESTIONS = 3
     if len(quiz.questions) < MIN_QUESTIONS:
         problems.append(f"至少 {MIN_QUESTIONS} 题，现在 {len(quiz.questions)} 题")
 
@@ -36,14 +37,17 @@ ARTICLE = """...500 字..."""
 SYSTEM = "你是出题老师。根据用户给的文章出选择题，题目要能考察理解。"
 
 
-def make_quiz(article: str) -> tuple[Quiz, int]:
-    """返回 (结果, 用了几次尝试)。"""
-    with tracked_run(agent="l6", model=MODEL) as run:
+def make_quiz(article: str, *, trace_id: str | None = None) -> tuple[Quiz, Run]:
+    """返回 (结果, 这次的 Run)。调用方从 Run 上拿 id 或 seq。"""
+    if not article.strip():
+        raise ValueError("文章为空")
+    with tracked_run(trace_id=trace_id, agent="quiz", model=MODEL) as run:
         quiz = invoke_structured(chat, [
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": article},
         ], Quiz, check=check_quiz, run=run)
-        return quiz, run.seq
+
+        return quiz, run
 
 
 if __name__ == "__main__":

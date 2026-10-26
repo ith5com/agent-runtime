@@ -53,3 +53,11 @@
 - 6.4 统计（ARTICLE 还是占位符，没换真文章，数字只能看个形状）：10 次里 8 次一次合格，2 次打回后合格，0 次失败。
 - 6.5 改严到 10 题：第一次跑 10 轮全失败，原因是条件改成了 `< 10` 但文案还写"至少 3 题"，模型收到"至少 3 题，现在 4 题"不知道改什么。打回时模型唯一能看到的就是 error 字符串，阈值要提成变量让条件和文案用同一个。改对后 3 轮都是第一次出 2 到 4 题，打回一次补到正好 10 题，第一题题干全变了，是整份重写不是往后追加。
 - 占位符 `...` 单独一行能运行，`problems.append(...)` 塞进去的是 Ellipsis 对象，到 join 时才炸；`len(q.answer)` 对 int 用 len 会 TypeError，这次没炸只是模型没出过越界答案。
+
+### 第 7 章 变成服务：后台任务与回调
+
+- 解决什么问题：前六章都是脚本，Go 调不到。这章用 FastAPI 把出题变成常驻服务：收到请求立刻回 202 带 trace_id，BackgroundTasks 在线程池里跑 Agent，跑完 POST 回调。出题要几十秒，HTTP 连接不能挂着等，所以结果靠回调送回去而不是放在响应里。
+- 租户为什么放 contextvar：工具参数是模型填的，tenant_id 做参数模型就能填别人的。放 `current_tenant` 里，入口 set、工具 get，工具签名里没有这个参数，模型没有途径碰到。线程池里 contextvar 不保证带过去，worker 第一行要重新 set。没 set 就 get 抛 LookupError，这是故意的，不能默默用默认值查到别人的数据。
+- worker 两个 try：第一个只包 fn()，成功失败各算出 status 和回调参数；第二个只包回调，失败只记日志。一开始照 zhice-ai 的写法把两件事放一个 try 里，坏回调地址测试时日志记成 quiz.failed，但 Agent 其实成功了，runs 表是 done、钱也花了，而且还会再回调一个 failed 给 Go。这是 zhice-ai 四个 worker 都有的 bug，拆成两个 try 后日志变成 quiz.done 加 quiz.callback_failed。
+- 三个失败场景：空文章在 with 外面抛 ValueError，202 照回、日志 quiz.failed、假 Go 收到 failed、runs 表不留记录；错 token 直接 401，require_internal 在 add_task 之前，后台什么都没跑；坏回调地址 Agent 正常跑完、run 是 done，但 Go 永远"进行中"，Python 修不了，要 Go 侧超时回收。
+- 日志改成每行一个 JSON，`extra` 里的字段进 JSON，`log.exception` 自动带栈。一次任务三处能查同一个 trace_id：curl 响应、日志的 accepted / done / fake_go.complete 三行、runs 表。读长栈从下往上找第一个自己文件的帧，`'CompleteIn' object is not subscriptable` 是 pydantic 对象要用点不用方括号。
