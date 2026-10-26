@@ -69,3 +69,12 @@
 - 读者断开后的两步收尾：路由的 events() 在 finally 里 gen.close()，生成器停着的那个 yield 处收到 GeneratorExit；answer_stream 接住后把 run.status 改成 aborted、记一条 partial 的 step，再 return。GeneratorExit 不是 Exception 的子类，tracked_run 的 except 接不到，所以要单独接；用 return 而不是 raise，让 with 正常退出走 else 分支把 aborted 写进表。验证：kill curl 后 run 68 是 aborted，content 存了半截 472 字，token 记 0 因为 usage 在最后一片没收到。
 - 一个副产品：sse 返回占位符 `...` 时 events() 自己抛异常，这种情况 Starlette 没把异步生成器关干净，finally 没跑，run 60 到 62 永远 running。和读者断开不是一种情况，留给第 9 章卡住回收当测试数据。
 - 攒头判标签：模型第一行的 [简短] / [详细] 会被拆成几片吐出来，不能看第一片，攒到见换行或 12 字再 split_mode，之后才发 meta。表里 content 存带标签原文，delta 发出去的不带。events() 是全教程唯一的 async，因为 StreamingResponse 要在事件循环里发，iterate_in_threadpool 把同步生成器放线程池一片片取。
+
+### 第 9 章 稳：超时、熔断、卡住回收
+
+- 三类问题三个对策：请求挂死靠超时，后台 60 秒、问答 20 秒，流式的超时是每次读的间隔不是整个流；厂商整体故障靠熔断器，连续失败到阈值就直接拒绝不发请求；进程被杀靠卡住回收，lifespan 里起一个协程每 5 分钟把超过 30 分钟的 running 标成 failed。
+- 三态怎么转：closed 连续失败 fail_max 次变 open，open 过了 cooldown 变 half_open，half_open 只放一个试探，成功回 closed，失败再 open 一轮。状态不存变量，从 `_opened_at` 和时钟算出来，省掉"冷却到期谁来改状态"这件事。failure 里"已经打开过"和"到阈值"两个条件缺一不可，删掉前者第三个测试会红。
+- 流式的判定：拿到第一片才算成功，第一片之前出错算失败，读者中途断开不算依赖失败。`except GeneratorExit: raise` 写在 `except Exception` 前面是为了说明这是有意的。
+- 第一次写 pytest：Breaker 的 clock 可注入，测试里换成一个 `__call__` 返回 `self.t` 的假时钟，`clock.t = 31` 就是过了 31 秒，不用真等。`called = []` 配 lambda 验证熔断中 fn 根本没被调。骨架里两处 `...` 没填时四个用例全红，`if ...:` 因为 Ellipsis 是真值变成失败一次就打开，测试把它逮出来了。
+- 验收：reap_stale 第一次跑收了 7 条，不止留着的 60 到 62，还有第 4 章进程被杀的 id 1 和第 4、5 章实验留下的 9、10、59。LLM_BASE_URL 改坏后 run 70 到 72 是 ConnectError，73 起是 CircuitOpen 且 latency 0，31 秒后的 78 是试探、再次 ConnectError 重新打开。本地 ConnectError 本身就是瞬间失败，熔断的价值在真超时场景：20 秒对 0 秒。
+- 一个坑：main.py 末尾又写了一次 `app = FastAPI(..., lifespan=lifespan)`，把前面注册了路由的 app 覆盖掉，连 /health 都 404。`app = FastAPI` 全文件只能一处，且在所有 `@app` 之前；import 全部放文件头。

@@ -1,13 +1,22 @@
+import asyncio
 import hmac
+import json
 import logging
 import os
+from contextlib import asynccontextmanager
+from typing import Callable
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, BackgroundTasks, Header, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from starlette.concurrency import iterate_in_threadpool
 
+import gateway
+from l6_struct import make_quiz
 from log import setup_logging
-from runs import init_db, new_trace_id
+from runs import init_db, new_trace_id, reap_stale
+from stream import answer_stream
 
 load_dotenv()
 setup_logging()
@@ -15,7 +24,28 @@ log = logging.getLogger("agent-runtime")
 
 INTERNAL_TOKEN = os.environ["INTERNAL_TOKEN"]
 
-app = FastAPI(title="agent-runtime")
+REAP_EVERY = 300   # 秒
+
+
+async def reaper() -> None:
+    while True:
+        try:
+            ids = await asyncio.to_thread(reap_stale)
+            if ids:
+                log.warning("runs.reaped", extra={"run_ids": ids})
+        except Exception:
+            log.exception("runs.reap_failed")
+        await asyncio.sleep(REAP_EVERY)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    task = asyncio.create_task(reaper())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="agent-runtime", lifespan=lifespan)
 init_db()
 
 
@@ -44,10 +74,6 @@ def fake_go_complete(job_id: int, body: CompleteIn, x_tenant_id: int = Header(),
                                                    # result 只记题数不记全文，太长
     return {"ok": True}
 
-from typing import Callable
-import gateway
-from l6_struct import make_quiz
-
 
 def job_worker(agent_name: str, fn: Callable, job_id: int, tenant_id: int, trace_id: str) -> None:
     """通用后台 worker：设租户，跑 fn，成功失败都回调；回调失败只记日志。fn 无参，返回 (pydantic 结果, Run)。"""
@@ -66,7 +92,6 @@ def job_worker(agent_name: str, fn: Callable, job_id: int, tenant_id: int, trace
         log.exception(f"{agent_name}.callback_failed", extra={"job_id": job_id, "trace_id": trace_id})
 
 
-
 class QuizRunIn(BaseModel):
     job_id: int
     text: str
@@ -82,11 +107,6 @@ def run_quiz(body: QuizRunIn, background: BackgroundTasks,
                         body.job_id, x_tenant_id, trace_id)
     log.info("quiz.accepted", extra={"job_id": body.job_id, "tenant_id": x_tenant_id, "trace_id": trace_id})
     return {"trace_id": trace_id}
-
-import json
-from fastapi.responses import StreamingResponse
-from starlette.concurrency import iterate_in_threadpool
-from stream import answer_stream
 
 
 def sse(ev: dict) -> str:

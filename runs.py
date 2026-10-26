@@ -161,3 +161,19 @@ def tracked_run(*, trace_id: str | None = None, agent: str, model: str):
        finish_run(run.id, status=run.status, model=model, # status 用 run.status，其余和上面一样，没有 error
                     input_tokens=run.input_tokens, output_tokens=run.output_tokens,
                     latency_ms=int((time.perf_counter() - t0) * 1000), steps=run.seq)        
+
+
+STALE_AFTER_MIN = 30
+
+
+def reap_stale(max_age_min: int = STALE_AFTER_MIN) -> list[int]:
+    """把卡在 running 超过 max_age_min 分钟的 run 标成 failed，返回收掉的 id。"""
+    err = f"stale: 超过 {max_age_min} 分钟没有结束，进程可能中途退出"
+    with connect() as conn:
+        rows = conn.execute(
+            """UPDATE runs SET status='failed', error=?, finished_at=datetime('now')
+               WHERE status='running' AND created_at < datetime('now', ?)
+               RETURNING id""",
+            (err, f"-{max_age_min} minutes"),
+        ).fetchall()
+        return [r["id"] for r in rows]
