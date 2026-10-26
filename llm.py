@@ -1,6 +1,7 @@
 import os
 import httpx
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -21,3 +22,25 @@ def chat(messages: list[dict], tools: list[dict] | None = None, tool_choice: dic
     resp = client.post("/chat/completions", headers=HEADERS, json=body)
     resp.raise_for_status()
     return resp.json()
+from typing import Iterator
+
+
+def chat_stream(messages: list[dict]) -> Iterator[dict]:
+    """流式发一次请求，逐片产出 {"text": ...}；最后一片是 {"text": "", "usage": {...}}。"""
+    body = {"model": MODEL, "messages": messages, "stream": True,
+            "stream_options": {"include_usage": True}}
+    with client.stream("POST", "/chat/completions", headers=HEADERS, json=body) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line.startswith("data: "):
+                continue
+            payload = line[len("data: "):]
+            if payload == "[DONE]":
+                break
+            chunk = json.loads(payload)
+            if chunk.get("usage"):
+                yield {"text": "", "usage": chunk["usage"]}
+                continue
+            delta = chunk["choices"][0]["delta"].get("content")
+            if delta:
+                yield {"text": delta}

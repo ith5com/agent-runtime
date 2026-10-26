@@ -82,3 +82,43 @@ def run_quiz(body: QuizRunIn, background: BackgroundTasks,
                         body.job_id, x_tenant_id, trace_id)
     log.info("quiz.accepted", extra={"job_id": body.job_id, "tenant_id": x_tenant_id, "trace_id": trace_id})
     return {"trace_id": trace_id}
+
+import json
+from fastapi.responses import StreamingResponse
+from starlette.concurrency import iterate_in_threadpool
+from stream import answer_stream
+
+
+def sse(ev: dict) -> str:
+    """一个事件字典 → 一段 SSE 文本：event 行 + data 行 + 空行。"""
+    name = ev.get("event", "message")
+    data = {k: v for k, v in ev.items() if k != "event"}
+    return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                                          # f-string 拼三行，data 用 json.dumps(ensure_ascii=False)
+
+
+class AskIn(BaseModel):
+    question: str
+
+
+@app.post("/agents/tutor/stream")
+def tutor_stream(body: AskIn, x_internal_token: str = Header(), x_tenant_id: int = Header(),
+                 x_trace_id: str | None = Header(default=None)):
+    require_internal(x_internal_token)
+    q = body.question.strip()
+    if not q or len(q) > 500:
+        raise HTTPException(status_code=400, detail="question must be 1-500 chars")
+    trace_id = x_trace_id or new_trace_id()
+    gateway.current_tenant.set(x_tenant_id)
+    gen = answer_stream(q, trace_id=trace_id)
+
+    async def events():
+        try:
+            async for ev in iterate_in_threadpool(gen):
+                yield sse(ev)
+        finally:
+            gen.close()
+
+    log.info("tutor.stream", extra={"tenant_id": x_tenant_id, "trace_id": trace_id})
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

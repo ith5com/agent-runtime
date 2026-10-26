@@ -61,3 +61,11 @@
 - worker 两个 try：第一个只包 fn()，成功失败各算出 status 和回调参数；第二个只包回调，失败只记日志。一开始照 zhice-ai 的写法把两件事放一个 try 里，坏回调地址测试时日志记成 quiz.failed，但 Agent 其实成功了，runs 表是 done、钱也花了，而且还会再回调一个 failed 给 Go。这是 zhice-ai 四个 worker 都有的 bug，拆成两个 try 后日志变成 quiz.done 加 quiz.callback_failed。
 - 三个失败场景：空文章在 with 外面抛 ValueError，202 照回、日志 quiz.failed、假 Go 收到 failed、runs 表不留记录；错 token 直接 401，require_internal 在 add_task 之前，后台什么都没跑；坏回调地址 Agent 正常跑完、run 是 done，但 Go 永远"进行中"，Python 修不了，要 Go 侧超时回收。
 - 日志改成每行一个 JSON，`extra` 里的字段进 JSON，`log.exception` 自动带栈。一次任务三处能查同一个 trace_id：curl 响应、日志的 accepted / done / fake_go.complete 三行、runs 表。读长栈从下往上找第一个自己文件的帧，`'CompleteIn' object is not subscriptable` 是 pydantic 对象要用点不用方括号。
+
+### 第 8 章 流式：SSE 与事件协议
+
+- 解决什么问题：问答是读者在等，要边生成边显示。chat_stream 把第 1 章的流式封装成生成器逐片 yield，请求里加 `stream_options.include_usage` 最后一片才给 usage；answer_stream 把片变成事件；路由用 StreamingResponse 一片片发。
+- 四种事件：meta 开头一次带 run_id 和 mode，delta 文字片段多次，done 结束带 token，error 出错时代替 done。前端只认这一套，拒答也走同一套。SSE 就是三行文本：event 行、data 行、空行。
+- 读者断开后的两步收尾：路由的 events() 在 finally 里 gen.close()，生成器停着的那个 yield 处收到 GeneratorExit；answer_stream 接住后把 run.status 改成 aborted、记一条 partial 的 step，再 return。GeneratorExit 不是 Exception 的子类，tracked_run 的 except 接不到，所以要单独接；用 return 而不是 raise，让 with 正常退出走 else 分支把 aborted 写进表。验证：kill curl 后 run 68 是 aborted，content 存了半截 472 字，token 记 0 因为 usage 在最后一片没收到。
+- 一个副产品：sse 返回占位符 `...` 时 events() 自己抛异常，这种情况 Starlette 没把异步生成器关干净，finally 没跑，run 60 到 62 永远 running。和读者断开不是一种情况，留给第 9 章卡住回收当测试数据。
+- 攒头判标签：模型第一行的 [简短] / [详细] 会被拆成几片吐出来，不能看第一片，攒到见换行或 12 字再 split_mode，之后才发 meta。表里 content 存带标签原文，delta 发出去的不带。events() 是全教程唯一的 async，因为 StreamingResponse 要在事件循环里发，iterate_in_threadpool 把同步生成器放线程池一片片取。
