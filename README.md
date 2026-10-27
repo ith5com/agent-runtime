@@ -105,3 +105,23 @@
 别说的：别说"因为大家都用"，会被追用了哪些；别说"手写版有问题"，刚说跑得好好的。要点是换的目的是验证，不是修复。
 
 追问"为什么不一开始就用"：一开始用它就不知道 tool_call 的 id 要一一回、tool_choice 怎么强制结构化输出，这些坑是手写时踩出来的。先手写再换，两边都懂；只会用框架，出问题分不清是我的层还是它的层。
+
+### 第 10 章 收口：换上 LangChain，对照 zhice-ai
+
+- 换层为什么写适配器不改上层：上层只认 OpenAI 格式的字典，llm_lc.py 在边界上双向翻译（to_lc、from_lc），run_loop、tracked_run、invoke_structured、Breaker、main.py 一个字没动。总共改了 6 行 import（l2 到 l6 五个脚本加 stream.py）加一个新文件。zhice-ai 走的是另一条路，runtime.py 直接认 `resp.tool_calls`、`ToolMessage(...)`，换客户端就得改循环。
+- 两个坑：invalid_tool_calls 必须翻译回 arguments 原始字符串，否则不合法 JSON 的回复在上层看起来像"没调工具"走错分支；openai 客户端默认读系统代理，电脑上开着 SOCKS 代理就要 socksio，手写版 `trust_env=False` 九章都没碰到。换层最容易漏的是两边默认值不同。
+- max_retries 设 0：让熔断器的失败计数和第 9 章验证的行为一致，重试在熔断之内。不用 with_structured_output：自己的打回重试把全部错误列全送回模型并记坏样本，它做不到。
+
+10.4 对照 zhice-ai，七项：
+
+| 项 | zhice-ai | 我的 | 结论 |
+|---|---|---|---|
+| run_loop 两个出口和工具出错 | 两个出口一样；多接一种 HTTPStatusError 把状态码给模型；循环直接认 LangChain 对象 | 认 OpenAI 字典，客户端可换 | 出口和兜错它对；分层我对，它的循环和框架绑死 |
+| runs 表字段和 PRICES | 多 tenant_id、user_id、session_id、prompt_version 四列；PRICES 三个模型含 embedding | 没有租户和提示词版本 | 它对，这四列是多租户和评测的前提，五个 Agent 教程要补 |
+| tracked_run 有没有 | 有，runs.py 末尾，10-21 加的，未提交；但没有任何 Agent 在用，start_run / finish_run 直接调的地方 8 个文件 33 处，tutor 一个文件 10 处 | 第 5 章起全部走 tracked_run | 我对，它的 tracked_run 是摆设 |
+| 结构化输出重试在哪、几份 | guide、quiz、graph、mindmap 各自一个 `for attempt in range` 循环，都用 with_structured_output，四份 | 一个 invoke_structured，Agent 只给 schema 和 check | 我对，四份逻辑相同，改一处漏三处 |
+| worker 几份 | guide、index、quiz、graph、mindmap 五份逐行相同，而且是"跑 Agent 和回调 done 放一个 try"那个形状，回调失败会被记成 Agent 失败再回调一个 failed | 一个 job_worker，两个 try | 我对，这是第 7 章亲手跑出来的 bug，它五处都有 |
+| breaker 流式判定 | 和我的完全一样；tutor 入口多一个 `state == "open"` 预检，因为它先要检索，检索也花钱 | 没有预检 | 一样；预检在它那边有理由，我没有检索所以不需要 |
+| reap_stale 排除了谁 | 排除 agent='judge'，用 PostgreSQL 的 make_interval | 不排除，SQLite 的 datetime 偏移 | 它对，裁判一批跑几十分钟不能收；我现在没有裁判 |
+
+zhice-ai 该改的清单，按收益排：worker 五份合一并拆两个 try；四份结构化重试合成 invoke_structured；33 处 start_run / finish_run 换 tracked_run。五个 Agent 教程走到哪个 Agent 改哪个。10.5 用 tracked_run 改 quiz 没做，留给五个 Agent 教程第 4 章。

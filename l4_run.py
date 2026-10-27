@@ -1,5 +1,5 @@
 import time
-from llm import chat, MODEL
+from llm_lc import chat, MODEL
 from runtime import run_loop
 from runs import init_db, start_run, finish_run, get_run, new_trace_id, tracked_run
 from l3_agent import TOOLS, SCHEMA, send

@@ -1,5 +1,5 @@
 # 4 l3_agent.py：三个工具加一个坏的
-from llm import chat
+from llm_lc import chat
 from runtime import run_loop
 from l2_tools import get_time, add, TOOLS_SCHEMA
 

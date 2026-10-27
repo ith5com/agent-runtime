@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from llm import chat, MODEL
+from llm_lc import chat, MODEL
 from runs import init_db, tracked_run
 from structured import invoke_structured
 from runs import Run

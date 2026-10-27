@@ -1,4 +1,4 @@
-from llm import MODEL
+from llm_lc import MODEL
 from runtime import run_loop
 from runs import init_db, tracked_run, get_run
 from l3_agent import TOOLS, send

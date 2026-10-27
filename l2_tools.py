@@ -2,7 +2,7 @@
 # from dotenv import load_dotenv
 import httpx
 import json
-from llm import chat
+from llm_lc import chat
 # load_dotenv()
 
 # BASE_URL = os.environ["LLM_BASE_URL"]

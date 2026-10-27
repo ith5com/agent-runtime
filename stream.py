@@ -2,7 +2,7 @@
 import time
 from typing import Iterator
 
-from llm import chat_stream, MODEL
+from llm_lc import chat_stream, MODEL
 from runs import tracked_run
 
 from breaker import CircuitOpen
