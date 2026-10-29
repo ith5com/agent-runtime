@@ -10,3 +10,7 @@ wheels/
 runs.db
 
 # Virtual environments
+
+
+# 默写
+/l1_dictation.py
