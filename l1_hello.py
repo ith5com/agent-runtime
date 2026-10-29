@@ -1,0 +1,113 @@
+import os
+from dotenv import load_dotenv
+
+import httpx
+import json
+
+# 加载环境变量
+load_dotenv()
+
+BASE_URL = os.environ["LLM_BASE_URL"]
+API_KEY = os.environ["LLM_API_KEY"]
+MODEL = os.environ["LLM_MODEL"]
+
+# 打印验证
+print(BASE_URL, MODEL, API_KEY[:6])  # https://api.deepseek.com/v1 deepseek-chat sk-0dc
+
+
+# 封装请求函数
+client = httpx.Client(base_url=BASE_URL, timeout=60, trust_env=False)
+HEADERS = {"Authorization": f"Bearer {API_KEY}"}
+
+
+def chat(messages: list[dict]) -> dict:
+    resp = client.post(
+        "/chat/completions",
+        headers=HEADERS,
+        json={"model": MODEL, "messages": messages},
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+data = chat([{"role": "user", "content": "请你一句话介绍RAG"}])
+print(json.dumps(data, ensure_ascii=False, indent=2))
+
+# 下面四行你自己写：回答、finish_reason、prompt_tokens、completion_tokens
+
+print(data["choices"][0]["finish_reason"])
+print(data["usage"]["prompt_tokens"])
+print(data["usage"]["completion_tokens"])
+
+
+# 让模型输出 JSON，看它听不听话
+
+SYSTEM = '你只能输出JSON格式：{"answer":string, confidence:number}不要输出其他文字'
+
+# ok = 0
+
+# for i in range(5):
+#     data = chat(
+#         [
+#             {"role": "system", "content": SYSTEM},
+#             {"role": "user", "content": "什么是RAG"},
+#         ]
+#     )
+#     answer = data["choices"][0]["message"]["content"]
+#     try:
+#         obj = json.loads(answer)
+#         ok = ok + 1
+#         print(obj)
+#     except json.JSONDecodeError:
+#         print(f"第{ok}次失败：", answer)
+# print(f"成功：{ok}/5次")
+
+
+# 流式 stream=Ture
+
+import time
+
+
+def chat_stream(messages: list[dict]):
+    t0 = time.monotonic()
+    first = None
+    pieces = []
+    with client.stream(
+        "POST",
+        "/chat/completions",
+        headers=HEADERS,
+        json={"model": MODEL, "messages": messages, "stream": True},
+    ) as resp:
+        resp.raise_for_status()
+        for line in resp.iter_lines():
+            if not line.startswith("data: "):
+                continue
+            payload = line[len("data: ") :]
+            if payload == "[DONE]":
+                break
+            chunk = json.loads(payload)
+            delta = chunk["choices"][0]["delta"].get("content")
+            if not delta:
+                continue
+            if first is None:
+                first = time.monotonic() - t0
+            print(delta, end="", flush=True)
+            pieces.append(delta)
+        print()
+        print(f"首字 {first:.2f}s，总耗时 {time.monotonic() - t0:.2f}s")
+        return "".join(pieces)
+
+
+# 验证流式
+
+ok = 0
+for i in range(5):
+    answer = chat_stream(
+        [{"role": "system", "content": SYSTEM}, {"role": "user", "content": "你是谁"}]
+    )
+    try:
+        obj = json.loads(answer)
+        ok = ok + 1
+    except json.JSONDecodeError:
+        print(f"第{ok}次失败: {answer}")
+print(f"成功 {ok}/5次")
