@@ -1,10 +1,10 @@
 # agent-runtime
 
-从零重搭 zhice-ai 运行时的练习场。教程在 ../ai-redo/，代码在这里。规则：
+从零重搭 wxk-ai 运行时的练习场。教程在 ../docs/2-教程/，代码在这里。规则：
 
 1. 代码我自己敲，Claude 只出题、给提示、批改。
 2. 每章结束，用自己的话在下面写 3 到 5 行。
-3. zhice-ai/ 是参考答案，卡住超过 20 分钟才去翻。
+3. wxk-ai/ 是参考答案，卡住超过 20 分钟才去翻。
 4. 先用最原始的写法，感到痛了再引入库。
 
 ## 学习笔记
@@ -58,7 +58,7 @@
 
 - 解决什么问题：前六章都是脚本，Go 调不到。这章用 FastAPI 把出题变成常驻服务：收到请求立刻回 202 带 trace_id，BackgroundTasks 在线程池里跑 Agent，跑完 POST 回调。出题要几十秒，HTTP 连接不能挂着等，所以结果靠回调送回去而不是放在响应里。
 - 租户为什么放 contextvar：工具参数是模型填的，tenant_id 做参数模型就能填别人的。放 `current_tenant` 里，入口 set、工具 get，工具签名里没有这个参数，模型没有途径碰到。线程池里 contextvar 不保证带过去，worker 第一行要重新 set。没 set 就 get 抛 LookupError，这是故意的，不能默默用默认值查到别人的数据。
-- worker 两个 try：第一个只包 fn()，成功失败各算出 status 和回调参数；第二个只包回调，失败只记日志。一开始照 zhice-ai 的写法把两件事放一个 try 里，坏回调地址测试时日志记成 quiz.failed，但 Agent 其实成功了，runs 表是 done、钱也花了，而且还会再回调一个 failed 给 Go。这是 zhice-ai 四个 worker 都有的 bug，拆成两个 try 后日志变成 quiz.done 加 quiz.callback_failed。
+- worker 两个 try：第一个只包 fn()，成功失败各算出 status 和回调参数；第二个只包回调，失败只记日志。一开始照 wxk-ai 的写法把两件事放一个 try 里，坏回调地址测试时日志记成 quiz.failed，但 Agent 其实成功了，runs 表是 done、钱也花了，而且还会再回调一个 failed 给 Go。这是 wxk-ai 四个 worker 都有的 bug，拆成两个 try 后日志变成 quiz.done 加 quiz.callback_failed。
 - 三个失败场景：空文章在 with 外面抛 ValueError，202 照回、日志 quiz.failed、假 Go 收到 failed、runs 表不留记录；错 token 直接 401，require_internal 在 add_task 之前，后台什么都没跑；坏回调地址 Agent 正常跑完、run 是 done，但 Go 永远"进行中"，Python 修不了，要 Go 侧超时回收。
 - 日志改成每行一个 JSON，`extra` 里的字段进 JSON，`log.exception` 自动带栈。一次任务三处能查同一个 trace_id：curl 响应、日志的 accepted / done / fake_go.complete 三行、runs 表。读长栈从下往上找第一个自己文件的帧，`'CompleteIn' object is not subscriptable` 是 pydantic 对象要用点不用方括号。
 
@@ -83,7 +83,7 @@
 
 ### 为什么你的运行时是手写的，不用 LangChain 框架？
 
-不是二选一。先用 httpx 裸调写通了整条链路：循环、工具协议、记账、结构化输出、熔断，然后把最底层的模型调用换成 LangChain，上层一行没动。线上 zhice-ai 用的是 LangChain，手写那版是为了把协议搞清楚。
+不是二选一。先用 httpx 裸调写通了整条链路：循环、工具协议、记账、结构化输出、熔断，然后把最底层的模型调用换成 LangChain，上层一行没动。线上 wxk-ai 用的是 LangChain，手写那版是为了把协议搞清楚。
 
 为什么先手写：工具调用协议就是两条规则，模型那条回复要原样放回消息列表，每个 tool_call 都要回一条 tool 消息，漏一条 400。结构化输出就是 tool_choice 强制调一个 schema 工具。这些 LangChain 都包掉了，包掉的后果是出问题时不知道在哪一层。遇到过 DeepSeek 偶尔无视 tool_choice 直接回文本，手写版一眼看出是没有 tool_calls 字段，走打回分支；只会 with_structured_output 的话只能看到一个解析异常。
 
@@ -106,15 +106,15 @@
 
 追问"为什么不一开始就用"：一开始用它就不知道 tool_call 的 id 要一一回、tool_choice 怎么强制结构化输出，这些坑是手写时踩出来的。先手写再换，两边都懂；只会用框架，出问题分不清是我的层还是它的层。
 
-### 第 10 章 收口：换上 LangChain，对照 zhice-ai
+### 第 10 章 收口：换上 LangChain，对照 wxk-ai
 
-- 换层为什么写适配器不改上层：上层只认 OpenAI 格式的字典，llm_lc.py 在边界上双向翻译（to_lc、from_lc），run_loop、tracked_run、invoke_structured、Breaker、main.py 一个字没动。总共改了 6 行 import（l2 到 l6 五个脚本加 stream.py）加一个新文件。zhice-ai 走的是另一条路，runtime.py 直接认 `resp.tool_calls`、`ToolMessage(...)`，换客户端就得改循环。
+- 换层为什么写适配器不改上层：上层只认 OpenAI 格式的字典，llm_lc.py 在边界上双向翻译（to_lc、from_lc），run_loop、tracked_run、invoke_structured、Breaker、main.py 一个字没动。总共改了 6 行 import（l2 到 l6 五个脚本加 stream.py）加一个新文件。wxk-ai 走的是另一条路，runtime.py 直接认 `resp.tool_calls`、`ToolMessage(...)`，换客户端就得改循环。
 - 两个坑：invalid_tool_calls 必须翻译回 arguments 原始字符串，否则不合法 JSON 的回复在上层看起来像"没调工具"走错分支；openai 客户端默认读系统代理，电脑上开着 SOCKS 代理就要 socksio，手写版 `trust_env=False` 九章都没碰到。换层最容易漏的是两边默认值不同。
 - max_retries 设 0：让熔断器的失败计数和第 9 章验证的行为一致，重试在熔断之内。不用 with_structured_output：自己的打回重试把全部错误列全送回模型并记坏样本，它做不到。
 
-10.4 对照 zhice-ai，七项：
+10.4 对照 wxk-ai，七项：
 
-| 项 | zhice-ai | 我的 | 结论 |
+| 项 | wxk-ai | 我的 | 结论 |
 |---|---|---|---|
 | run_loop 两个出口和工具出错 | 两个出口一样；多接一种 HTTPStatusError 把状态码给模型；循环直接认 LangChain 对象 | 认 OpenAI 字典，客户端可换 | 出口和兜错它对；分层我对，它的循环和框架绑死 |
 | runs 表字段和 PRICES | 多 tenant_id、user_id、session_id、prompt_version 四列；PRICES 三个模型含 embedding | 没有租户和提示词版本 | 它对，这四列是多租户和评测的前提，五个 Agent 教程要补 |
@@ -124,4 +124,4 @@
 | breaker 流式判定 | 和我的完全一样；tutor 入口多一个 `state == "open"` 预检，因为它先要检索，检索也花钱 | 没有预检 | 一样；预检在它那边有理由，我没有检索所以不需要 |
 | reap_stale 排除了谁 | 排除 agent='judge'，用 PostgreSQL 的 make_interval | 不排除，SQLite 的 datetime 偏移 | 它对，裁判一批跑几十分钟不能收；我现在没有裁判 |
 
-zhice-ai 该改的清单，按收益排：worker 五份合一并拆两个 try；四份结构化重试合成 invoke_structured；33 处 start_run / finish_run 换 tracked_run。五个 Agent 教程走到哪个 Agent 改哪个。10.5 用 tracked_run 改 quiz 没做，留给五个 Agent 教程第 4 章。
+wxk-ai 该改的清单，按收益排：worker 五份合一并拆两个 try；四份结构化重试合成 invoke_structured；33 处 start_run / finish_run 换 tracked_run。五个 Agent 教程走到哪个 Agent 改哪个。10.5 用 tracked_run 改 quiz 没做，留给五个 Agent 教程第 4 章。
